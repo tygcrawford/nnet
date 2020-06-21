@@ -2,13 +2,14 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
-curr_path = os.path.dirname(__file__)
-train_path = f'{curr_path}data/train'
+
+curr_path = os.path.dirname(os.path.realpath(__file__))
+train_path = f'{curr_path}/data/train'
 i_path = f'{train_path}/train-images'
 l_path = f'{train_path}/train-labels'
 
 
-class NNet:
+class NeuralNetwork:
     def __init__(self, layers, activation, weights=None, biases=None):
         self.layers = np.array(layers)
         self.activation = activation
@@ -23,11 +24,15 @@ class NNet:
         for layer in range(1, len(self.layers)):
             self.biases.append(np.zeros((self.layers[layer], 1)))
 
-    def run(self, data):
+    def forward_prop(self, data):
         output = data
         for layer in range(len(self.layers) - 1):
             output = self.activation(np.add(np.dot(self.weights[layer], output), self.biases[layer]))
         return output
+
+    @staticmethod
+    def mean_squared_error(output, expected):
+        return np.sum(np.square(output - expected))
 
     def save(self, path):
         with open(path, "wb") as f:
@@ -38,7 +43,7 @@ class NNet:
                 np.save(f, bias_layer)
 
     @staticmethod
-    def load(path, squishify):
+    def load(path, activation):
         with open(path, "rb") as f:
             layers = np.load(f)
 
@@ -50,10 +55,13 @@ class NNet:
             for bias_layer in range(len(layers) - 1):
                 biases.append(np.load(f))
 
-        return NNet(layers, squishify, weights=weights, biases=biases)
+        return NeuralNetwork(layers, activation, weights=weights, biases=biases)
 
     @staticmethod
-    def sigmoid(x):
+    def sigmoid(x, derivative=False):
+        if derivative:
+            return np.exp(-x) / np.square(1 + np.exp(-x))
+
         return 1 / (1 + np.exp(-x))
 
     @staticmethod
@@ -86,9 +94,12 @@ class Data:
 
         label = self.byte_as_int(self.label_f, 1)
 
+        expected = np.zeros((10, 1))
+        expected[label][0] = 1
+
         image = np.reshape(image, (len(image), 1))
 
-        return image, label
+        return image, expected
 
     def get_index(self, index):
         self.image_f.seek(16 + index * 784)
@@ -112,18 +123,21 @@ class Data:
 
 
 d = Data(i_path, l_path)
-i, label = d.get_index(18)
-d.close()
 
 l = [784, 16, 16, 10]
 
-nnet_a = NNet(l, NNet.sigmoid)
-nnet_a.randomize()
-nnet_a.save("save.npy")
+# NN = Neural_Network(l, Neural_Network.sigmoid)
+# NN.randomize()
 
-nnet_b = NNet.load("save.npy", NNet.sigmoid)
+NN = NeuralNetwork.load("save.npy", NeuralNetwork.sigmoid)
 
-a_out = nnet_a.run(i)
-b_out = nnet_b.run(i)
+cost = 0
+samples = 5000
 
-NNet.display_output(a_out)
+for i in range(samples):
+    img, label = d.get_next()
+    NN_out = NN.forward_prop(img)
+    cost += NeuralNetwork.mean_squared_error(NN_out, label)
+cost /= samples
+
+print(cost)
