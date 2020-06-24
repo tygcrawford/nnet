@@ -2,60 +2,142 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
-
 curr_path = os.path.dirname(os.path.realpath(__file__))
 train_path = f'{curr_path}/data/train'
 i_path = f'{train_path}/train-images'
 l_path = f'{train_path}/train-labels'
 
 
-class NeuralNetwork:
-    def __init__(self, layers, activation, weights=None, biases=None):
-        self.layers = np.array(layers)
+class Layer:
+    def __init__(self, neurons):
+        self.neurons = neurons
+        self.a = np.zeros((neurons, 1))
+
+
+class InputLayer(Layer):
+    def __init__(self, neurons):
+        super().__init__(neurons)
+
+    def calculate(self, data):
+        self.a = data
+        return self.a
+
+
+class DenseLayer(Layer):
+    def __init__(self, neurons, input_neurons, activation, weights=None, biases=None):
+        super().__init__(neurons)
+
+        self.input_neurons = input_neurons
+
+        self.z = np.zeros((neurons, 1))
+
+        # TODO: Weight initialization techniques
+        # he_init = np.sqrt(2 / self.input_neurons)
+        if weights is None:
+            self.weights = np.random.randn(self.neurons, self.input_neurons)
+        else:
+            self.weights = weights
+        if biases is None:
+            self.biases = np.zeros((neurons, 1))
+        else:
+            self.biases = biases
+
         self.activation = activation
-        self.weights = [] if weights is None else weights
-        self.biases = [] if biases is None else biases
 
-    def randomize(self):
-        for layer in range(1, len(self.layers)):
-            he_init = np.sqrt(2 / self.layers[layer - 1])
-            self.weights.append(np.random.randn(self.layers[layer], self.layers[layer - 1]) * he_init)
+    def calculate(self, data):
+        self.z = np.add(np.dot(self.weights, data), self.biases)
+        self.a = self.activation(self.z)
+        return self.a
 
-        for layer in range(1, len(self.layers)):
-            self.biases.append(np.zeros((self.layers[layer], 1)))
+
+
+class NeuralNetwork:
+    def __init__(self, layers):
+        self.layers = layers
 
     def forward_prop(self, data):
         output = data
-        for layer in range(len(self.layers) - 1):
-            output = self.activation(np.add(np.dot(self.weights[layer], output), self.biases[layer]))
+        for layer in self.layers:
+            output = layer.calculate(output)
         return output
 
-    @staticmethod
-    def mean_squared_error(output, expected):
-        return np.sum(np.square(output - expected))
+    def cost(self, expected, derivative=False):
+        if derivative:
+            return 2 * (self.layers[-1].a - expected)
 
+        return np.sum(np.square(self.layers[-1].a - expected))
+
+    def back_prop(self, expected):
+        error = [None] * len(self.layers)
+        error[-1] = np.multiply(self.cost(expected, derivative=True), self.sigmoid(self.layers[-1].z, derivative=True))
+
+        for l in range(len(self.layers)-2, 0, -1):
+            error[l] = np.multiply(np.dot(np.transpose(self.layers[l + 1].weights), error[l + 1]),
+                                   self.sigmoid(self.layers[l].z, derivative=True))
+
+        bias_gradient = error
+        weight_gradient = [None] * len(self.layers)
+        for l in range(len(self.layers)-1, 0, -1):
+            weight_gradient[l] = np.dot(error[l], np.transpose(self.layers[l-1].a)) # np.zeros((error[l], self.layers[l-1].shape[0]))
+
+        return weight_gradient[1:], bias_gradient[1:]
+
+    def batch_train(self, data, expected):
+        wg, bg = None, None
+        for i in range(len(data)):
+            self.forward_prop(data[i])
+            if wg is None and bg is None:
+                wg, bg = self.back_prop(expected[i])
+            else:
+                w, b = self.back_prop(expected[i])
+                for j in range(len(wg)):
+                    wg[j] += w[j]
+                for j in range(len(bg)):
+                    bg[j] += b[j]
+
+        for i in range(len(wg)):
+            wg[i] /= len(data)
+        for i in range(len(bg)):
+            bg[i] /= len(data)
+
+        l_rate = 1
+        for i in range(1, len(self.layers)):
+            self.layers[i].weights -= wg[i-1] * l_rate
+            self.layers[i].biases += bg[i-1] * l_rate
+
+
+    # TODO: Test save and load
     def save(self, path):
         with open(path, "wb") as f:
-            np.save(f, self.layers)
-            for weight_layer in self.weights:
-                np.save(f, weight_layer)
-            for bias_layer in self.biases:
-                np.save(f, bias_layer)
+            l = [l.neurons for l in self.layers]
+            np.save(f, np.array(l))
+            for i in range(1,len(self.layers)):
+                np.save(f, self.layers[i].weights)
+            for i in range(1,len(self.layers)):
+                np.save(f, self.layers[i].biases)
 
     @staticmethod
     def load(path, activation):
         with open(path, "rb") as f:
-            layers = np.load(f)
+            l = np.load(f)
 
             weights = []
-            for weight_layer in range(len(layers) - 1):
+            for weight_layer in range(len(l) - 1):
                 weights.append(np.load(f))
 
             biases = []
-            for bias_layer in range(len(layers) - 1):
+            for bias_layer in range(len(l) - 1):
                 biases.append(np.load(f))
 
-        return NeuralNetwork(layers, activation, weights=weights, biases=biases)
+        layers = [InputLayer(l[0])]
+        for i in range(1, len(l)):
+            layers.append(DenseLayer(i, i-1, activation, weights=weights[i-1], biases=biases[i-1]))
+
+        return NeuralNetwork(layers)
+
+    @staticmethod
+    def mean_squared_error(output, expected):
+        return np.sum(np.square(output - expected))
 
     @staticmethod
     def sigmoid(x, derivative=False):
@@ -124,20 +206,32 @@ class Data:
 
 d = Data(i_path, l_path)
 
-l = [784, 16, 16, 10]
+NN = NeuralNetwork([
+    InputLayer(784),
+    DenseLayer(16, 784, NeuralNetwork.sigmoid),
+    DenseLayer(16, 16, NeuralNetwork.sigmoid),
+    DenseLayer(10, 16, NeuralNetwork.sigmoid)
+])
 
-# NN = Neural_Network(l, Neural_Network.sigmoid)
-# NN.randomize()
+data = [d.get_next() for i in range(60000)]
+
+img = [i[0] for i in data]
+lbl = [i[1] for i in data]
+
+NN.batch_train(img, lbl)
+
+NN.save("save.npy")
+
 
 NN = NeuralNetwork.load("save.npy", NeuralNetwork.sigmoid)
 
-cost = 0
-samples = 5000
+training_tests = [d.get_index(i)[0] for i in range(500, 510)]
 
-for i in range(samples):
-    img, label = d.get_next()
-    NN_out = NN.forward_prop(img)
-    cost += NeuralNetwork.mean_squared_error(NN_out, label)
-cost /= samples
+afs = []
 
-print(cost)
+for test in training_tests:
+    afs.append(NN.forward_prop(test))
+
+for i in range(len(training_tests)):
+    Data.display_image(training_tests[i])
+    NeuralNetwork.display_output(afs[i])
